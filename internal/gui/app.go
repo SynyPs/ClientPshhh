@@ -6,6 +6,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/data/binding"
 	"github.com/fhg/ClientPshhh/internal/gui/screens"
+	"github.com/fhg/ClientPshhh/internal/models"
 	"github.com/fhg/ClientPshhh/internal/service"
 )
 
@@ -15,18 +16,15 @@ type MainWindow struct {
 	service *service.Orchestrator
 
 	// message list
-	messages binding.ExternalStringList
+	messages binding.ExternalUntypedList
 }
 
 func NewMainWindow(app fyne.App, svc *service.Orchestrator) *MainWindow {
 	w := app.NewWindow("Pshhh")
 	w.Resize(fyne.NewSize(400, 600))
 
-	strList := []string{}
-
-	data := binding.BindStringList(
-		&strList,
-	)
+	var datalist []interface{}
+	data := binding.BindUntypedList(&datalist)
 
 	appUI := &MainWindow{
 		app:      app,
@@ -45,7 +43,7 @@ func (mv *MainWindow) ShowAndRun() {
 }
 
 func (mv *MainWindow) showLogin() {
-	content := screens.LoginScreen(func(userName, server string) {
+	content := screens.LoginScreen(func(server string) {
 		err := mv.service.Connect(server)
 		if err != nil {
 			return
@@ -58,7 +56,10 @@ func (mv *MainWindow) showLogin() {
 func (mv *MainWindow) showChat() {
 	mv.service.SetOnMessageReceived(func(msg string) {
 		log.Printf("GUI: Получено сообщение для отображения: %s", msg)
-		mv.messages.Append(msg)
+		mv.messages.Append(models.UIMessage{
+			Text: msg,
+			IsMe: false,
+		})
 
 		mv.messages.Reload()
 	})

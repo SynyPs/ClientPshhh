@@ -10,15 +10,39 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/fhg/ClientPshhh/internal/gui/widgets"
+	"github.com/fhg/ClientPshhh/internal/models"
 	"github.com/fhg/ClientPshhh/internal/service"
 )
 
-func ChatScreen(svc *service.Orchestrator, data binding.ExternalStringList) fyne.CanvasObject {
+func ChatScreen(svc *service.Orchestrator, data binding.ExternalUntypedList) fyne.CanvasObject {
+	var currentChatKey string = ""
+
 	contactsData := binding.BindStringList(&[]string{})
 	contacts, _ := svc.GetContacts()
 	for _, c := range contacts {
 		contactsData.Append(c.Name)
 	}
+
+	list := widget.NewListWithData(
+		data,
+		func() fyne.CanvasObject {
+			return container.NewMax(widget.NewLabel("template"))
+		},
+		func(di binding.DataItem, co fyne.CanvasObject) {
+			val, _ := di.(binding.Untyped).Get()
+
+			msg := val.(models.UIMessage)
+			// binding.StringList хранит только текст.
+			// В реальном проекте используйте binding.UntypedList с кастомными структурами.
+
+			containerObj := co.(*fyne.Container)
+			containerObj.Objects = nil
+
+			bubble := widgets.NewMessageBubble(msg.Text, msg.IsMe)
+			containerObj.Add(bubble)
+			containerObj.Refresh()
+		},
+	)
 
 	contactList := widget.NewListWithData(
 		contactsData,
@@ -32,8 +56,26 @@ func ChatScreen(svc *service.Orchestrator, data binding.ExternalStringList) fyne
 		})
 
 	contactList.OnSelected = func(id widget.ListItemID) {
-		val, _ := contactsData.GetValue(id)
-		log.Println("Выбран чат :", val)
+		log.Println("Выбран чат :", contacts[id].PublicKey)
+
+		if id < 0 || id >= len(contacts) {
+			return
+		}
+		selectedContact := contacts[id]
+		currentChatKey = selectedContact.PublicKey
+
+		data.Set([]interface{}{})
+
+		history, err := svc.LoadChatHistory(currentChatKey)
+		if err != nil {
+			log.Println("Ошибка загрузки истории:", err)
+			return
+		}
+		for _, msg := range history {
+			data.Append(msg)
+		}
+
+		list.ScrollToBottom()
 	}
 
 	addContactBtn := widget.NewButtonWithIcon("Add", theme.ContentAddIcon(), func() {
@@ -55,15 +97,17 @@ func ChatScreen(svc *service.Orchestrator, data binding.ExternalStringList) fyne
 					err := svc.AddContact(keyEntry.Text, nameEntry.Text)
 					if err != nil {
 						log.Println("Ошибка добавления:", err)
-					} else {
-						// Обновляем список (в идеале через binding, но пока можно так)
-						log.Println("Контакт добавлен!")
-						// contactsData.Append(nameEntry.Text)
+						return
 					}
+					contactsData.Append(nameEntry.Text)
+
+					newContact := models.Contact{
+						PublicKey: keyEntry.Text,
+						Name:      nameEntry.Text,
+					}
+					contacts = append(contacts, newContact)
 				}
 			},
-			// Тут нужно передать родительское окно.
-			// Либо прокинь window в ChatScreen, либо используй глобальную переменную (плохо, но быстро)
 			fyne.CurrentApp().Driver().AllWindows()[0],
 		)
 	})
@@ -76,33 +120,17 @@ func ChatScreen(svc *service.Orchestrator, data binding.ExternalStringList) fyne
 			return
 		}
 
-		go svc.SendMessage(input.Text)
+		text := input.Text
+		go svc.SendMessage(input.Text, currentChatKey)
+
+		data.Append(models.UIMessage{
+			Text: text,
+			IsMe: true,
+		})
 		input.SetText("")
 	})
 
 	inputArea := container.NewBorder(nil, nil, nil, sendBtn, input)
-
-	list := widget.NewListWithData(
-		data,
-		func() fyne.CanvasObject {
-			return container.NewMax(widget.NewLabel("template"))
-		},
-		func(di binding.DataItem, co fyne.CanvasObject) {
-			val, _ := di.(binding.String).Get()
-
-			// binding.StringList хранит только текст.
-			// В реальном проекте используйте binding.UntypedList с кастомными структурами.
-
-			containerObj := co.(*fyne.Container)
-			containerObj.Objects = nil
-
-			isMe := false
-
-			bubble := widgets.NewMessageBubble(val, isMe)
-			containerObj.Add(bubble)
-			containerObj.Refresh()
-		},
-	)
 
 	leftPanel := container.NewBorder(addContactBtn, nil, nil, nil, contactList)
 	rightPanel := container.NewBorder(nil, inputArea, nil, nil, list)

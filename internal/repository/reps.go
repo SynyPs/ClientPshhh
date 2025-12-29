@@ -66,3 +66,11 @@ func (r *MessageRepository) FindOrCreateContact(pubKey string, defaultName strin
 func (r *MessageRepository) UpdateLastMessage(pubKey string, msg string) {
 	r.db.Model(&models.Contact{}).Where("public_key = ?", pubKey).Update("last_msg", msg)
 }
+
+func (r *MessageRepository) GetHistory(contactKey string, myKey string) ([]models.Message, error) {
+	var msgs []models.Message
+
+	err := r.db.Where("(sender_key = ? AND receiver_key = ?) OR (sender_key = ? AND receiver_key = ?)",
+		contactKey, myKey, myKey, contactKey).Order("created_at asc").Find(&msgs).Error
+	return msgs, err
+}

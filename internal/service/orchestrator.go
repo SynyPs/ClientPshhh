@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 
@@ -73,6 +74,8 @@ func (o *Orchestrator) Connect(url string) error {
 func (o *Orchestrator) readLoop() {
 	defer o.conn.Close(websocket.StatusInternalError, "closing")
 
+	myKey := o.keys.PublicBase64()
+
 	for {
 		var msgData models.Message
 		err := wsjson.Read(context.Background(), o.conn, &msgData)
@@ -83,18 +86,24 @@ func (o *Orchestrator) readLoop() {
 
 		// decrypted := o.keys.Decrypt(msgData.Content, msgData.SenderKey)
 
-		text := string(msgData.Content)
-		senderKey := msgData.SenderKey
-		if senderKey == "" {
-			senderKey = "Unknown"
+		if msgData.SenderKey == myKey {
+			// Это мое сообщение, игнорируем
+			continue
 		}
 
-		err = o.repo.FindOrCreateContact(senderKey, "User "+shortKey(senderKey))
+		if err := o.repo.SaveMessage(&msgData); err != nil {
+			log.Println("Ошибка сохранения входящего сообщения в БД:", err)
+			continue
+		}
+
+		text := string(msgData.Content)
+
+		err = o.repo.FindOrCreateContact(msgData.SenderKey, "User "+shortKey(msgData.SenderKey))
 		if err != nil {
 			log.Println("Error create contact:", err)
 		}
 
-		o.repo.UpdateLastMessage(senderKey, text)
+		o.repo.UpdateLastMessage(msgData.SenderKey, text)
 
 		if o.onMessage != nil {
 			o.onMessage(text)
@@ -109,13 +118,24 @@ func shortKey(k string) string {
 	return k
 }
 
-func (o *Orchestrator) SendMessage(text string) {
+func (o *Orchestrator) SendMessage(text string, receiver string) {
 	if o.conn == nil {
 		return
 	}
 
+	myKey := o.keys.PublicBase64()
+
 	msg := models.Message{
-		Content: []byte(text),
+		SenderKey:   myKey,
+		ReceiverKey: receiver,
+		Content:     []byte(text),
+	}
+
+	fmt.Println(msg)
+
+	if err := o.repo.SaveMessage(&msg); err != nil {
+		log.Println("Ошибка сохранения сообщения в БД:", err)
+		return
 	}
 
 	o.writeMu.Lock()
@@ -133,4 +153,21 @@ func (o *Orchestrator) GetContacts() ([]models.Contact, error) {
 
 func (o *Orchestrator) AddContact(pubKey, name string) error {
 	return o.repo.FindOrCreateContact(pubKey, name)
+}
+
+func (o *Orchestrator) LoadChatHistory(contactKey string) ([]models.UIMessage, error) {
+	myKey := o.keys.PublicBase64()
+	dbMsgs, err := o.repo.GetHistory(contactKey, myKey)
+	if err != nil {
+		return nil, err
+	}
+
+	var uiMsgs []models.UIMessage
+	for _, m := range dbMsgs {
+		uiMsgs = append(uiMsgs, models.UIMessage{
+			Text: string(m.Content),
+			IsMe: m.SenderKey != contactKey,
+		})
+	}
+	return uiMsgs, nil
 }
